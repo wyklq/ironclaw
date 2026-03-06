@@ -21,10 +21,24 @@ ironclaw          (first run, no database configured)
 
 Auto-detection via `check_onboard_needed()` in `main.rs`. Skips onboarding
 when `ONBOARD_COMPLETED` env var is set (written to `~/.ironclaw/.env` by
-the wizard). Otherwise triggers when no database is configured:
-- `DATABASE_URL` env var is set
-- `LIBSQL_PATH` env var is set
-- `~/.ironclaw/ironclaw.db` exists on disk
+the wizard).
+
+Database is considered configured when any of these is present:
+- `DATABASE_URL` env var
+- `LIBSQL_PATH` env var
+- `~/.ironclaw/ironclaw.db` on disk
+
+If no database is configured, onboarding runs immediately.
+
+With a database present but onboarding incomplete, startup checks
+backend-specific bootstrap requirements (`LLM_BACKEND`, default `nearai`):
+- `nearai`: requires `NEARAI_API_KEY`, `NEARAI_SESSION_TOKEN`, or
+  `~/.ironclaw/session.json`
+- `openai`: requires `OPENAI_API_KEY`
+- `anthropic`: requires `ANTHROPIC_API_KEY`
+- `openai_compatible`: requires `LLM_BASE_URL`
+- `tinfoil`: requires `TINFOIL_API_KEY`
+- `ollama`: no auth bootstrap requirement
 
 The `--no-onboard` CLI flag suppresses auto-detection.
 

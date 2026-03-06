@@ -153,10 +153,19 @@ Run the setup wizard to configure IronClaw:
 ironclaw onboard
 ```
 
-The wizard handles database connection, NEAR AI authentication (via browser OAuth),
-and secrets encryption (using your system keychain). Settings are persisted in the
-connected database; bootstrap variables (e.g. `DATABASE_URL`, `LLM_BACKEND`) are
-written to `~/.ironclaw/.env` so they are available before the database connects.
+The wizard handles database connection, LLM provider authentication (NEAR AI OAuth/API key
+or direct API keys for other backends), and secrets encryption (using your system keychain).
+Settings are persisted in the connected database; bootstrap variables (e.g. `DATABASE_URL`,
+`LLM_BACKEND`) are written to `~/.ironclaw/.env` so they are available before the database
+connects.
+
+For non-NEAR deployments, set `LLM_BACKEND` plus the provider's required credentials
+before first startup to avoid NEAR AI login prompts.
+
+```env
+LLM_BACKEND=openai
+OPENAI_API_KEY=sk-...
+```
 
 ### Alternative LLM Providers
 

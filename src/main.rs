@@ -1106,8 +1106,8 @@ async fn setup_wasm_channels(
 /// Check if onboarding is needed and return the reason.
 #[cfg(any(feature = "postgres", feature = "libsql"))]
 fn check_onboard_needed() -> Option<&'static str> {
-    let has_db = std::env::var("DATABASE_URL").is_ok()
-        || std::env::var("LIBSQL_PATH").is_ok()
+    let has_db = has_non_empty_env("DATABASE_URL")
+        || has_non_empty_env("LIBSQL_PATH")
         || ironclaw::config::default_libsql_path().exists();
 
     if !has_db {
@@ -1121,14 +1121,65 @@ fn check_onboard_needed() -> Option<&'static str> {
         return None;
     }
 
-    if std::env::var("NEARAI_API_KEY").is_err() {
-        let session_path = ironclaw::llm::session::default_session_path();
-        if !session_path.exists() {
-            return Some("First run");
+    let has_nearai_session = ironclaw::llm::session::default_session_path().exists();
+    check_onboard_needed_for_backend(has_nearai_session)
+}
+
+#[cfg(any(feature = "postgres", feature = "libsql"))]
+fn check_onboard_needed_for_backend(has_nearai_session: bool) -> Option<&'static str> {
+    let backend = std::env::var("LLM_BACKEND")
+        .ok()
+        .and_then(|value| value.parse::<ironclaw::config::LlmBackend>().ok())
+        .unwrap_or(ironclaw::config::LlmBackend::NearAi);
+
+    match backend {
+        ironclaw::config::LlmBackend::NearAi => {
+            let has_auth = has_non_empty_env("NEARAI_API_KEY")
+                || has_non_empty_env("NEARAI_SESSION_TOKEN")
+                || has_nearai_session;
+            if has_auth {
+                None
+            } else {
+                Some("NEAR AI authentication not configured")
+            }
+        }
+        ironclaw::config::LlmBackend::OpenAi => {
+            if has_non_empty_env("OPENAI_API_KEY") {
+                None
+            } else {
+                Some("OpenAI API key not configured")
+            }
+        }
+        ironclaw::config::LlmBackend::Anthropic => {
+            if has_non_empty_env("ANTHROPIC_API_KEY") {
+                None
+            } else {
+                Some("Anthropic API key not configured")
+            }
+        }
+        ironclaw::config::LlmBackend::Ollama => None,
+        ironclaw::config::LlmBackend::OpenAiCompatible => {
+            if has_non_empty_env("LLM_BASE_URL") {
+                None
+            } else {
+                Some("OpenAI-compatible endpoint not configured")
+            }
+        }
+        ironclaw::config::LlmBackend::Tinfoil => {
+            if has_non_empty_env("TINFOIL_API_KEY") {
+                None
+            } else {
+                Some("Tinfoil API key not configured")
+            }
         }
     }
+}
 
-    None
+#[cfg(any(feature = "postgres", feature = "libsql"))]
+fn has_non_empty_env(key: &str) -> bool {
+    std::env::var(key)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
 }
 
 /// Inject credentials for a channel based on naming convention.
@@ -1181,4 +1232,107 @@ async fn inject_channel_credentials(
     }
 
     Ok(count)
+}
+
+#[cfg(all(test, any(feature = "postgres", feature = "libsql")))]
+mod tests {
+    use std::sync::Mutex;
+
+    use super::{check_onboard_needed, check_onboard_needed_for_backend};
+
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
+
+    fn clear_relevant_env() {
+        let keys = [
+            "DATABASE_URL",
+            "LIBSQL_PATH",
+            "ONBOARD_COMPLETED",
+            "LLM_BACKEND",
+            "NEARAI_API_KEY",
+            "NEARAI_SESSION_TOKEN",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "LLM_BASE_URL",
+            "TINFOIL_API_KEY",
+        ];
+
+        // SAFETY: Guarded by ENV_MUTEX in tests to avoid concurrent env mutation.
+        unsafe {
+            for key in keys {
+                std::env::remove_var(key);
+            }
+        }
+    }
+
+    #[test]
+    fn openai_backend_with_key_does_not_require_nearai_auth() {
+        let _guard = ENV_MUTEX.lock().expect("env mutex poisoned");
+        clear_relevant_env();
+
+        // SAFETY: Guarded by ENV_MUTEX in tests to avoid concurrent env mutation.
+        unsafe {
+            std::env::set_var("DATABASE_URL", "postgres://localhost/test");
+            std::env::set_var("LLM_BACKEND", "openai");
+            std::env::set_var("OPENAI_API_KEY", "sk-test");
+        }
+
+        assert_eq!(check_onboard_needed_for_backend(false), None);
+
+        clear_relevant_env();
+    }
+
+    #[test]
+    fn nearai_backend_without_auth_requires_onboarding() {
+        let _guard = ENV_MUTEX.lock().expect("env mutex poisoned");
+        clear_relevant_env();
+
+        // SAFETY: Guarded by ENV_MUTEX in tests to avoid concurrent env mutation.
+        unsafe {
+            std::env::set_var("DATABASE_URL", "postgres://localhost/test");
+            std::env::set_var("LLM_BACKEND", "nearai");
+        }
+
+        assert_eq!(
+            check_onboard_needed_for_backend(false),
+            Some("NEAR AI authentication not configured")
+        );
+
+        clear_relevant_env();
+    }
+
+    #[test]
+    fn openai_compatible_without_base_url_requires_onboarding() {
+        let _guard = ENV_MUTEX.lock().expect("env mutex poisoned");
+        clear_relevant_env();
+
+        // SAFETY: Guarded by ENV_MUTEX in tests to avoid concurrent env mutation.
+        unsafe {
+            std::env::set_var("DATABASE_URL", "postgres://localhost/test");
+            std::env::set_var("LLM_BACKEND", "openai_compatible");
+        }
+
+        assert_eq!(
+            check_onboard_needed_for_backend(false),
+            Some("OpenAI-compatible endpoint not configured")
+        );
+
+        clear_relevant_env();
+    }
+
+    #[test]
+    fn onboard_completed_short_circuits_backend_requirements() {
+        let _guard = ENV_MUTEX.lock().expect("env mutex poisoned");
+        clear_relevant_env();
+
+        // SAFETY: Guarded by ENV_MUTEX in tests to avoid concurrent env mutation.
+        unsafe {
+            std::env::set_var("DATABASE_URL", "postgres://localhost/test");
+            std::env::set_var("ONBOARD_COMPLETED", "true");
+            std::env::set_var("LLM_BACKEND", "openai");
+        }
+
+        assert_eq!(check_onboard_needed(), None);
+
+        clear_relevant_env();
+    }
 }
